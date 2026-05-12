@@ -1,18 +1,30 @@
-# PIFluxDustLogger
-Private Dust Logger with PMS7003
-1. InfluxDB 2 설치
-InfluxDB는 Linux에서 systemd 서비스로 설치할 수 있고, 공식 문서도 Debian/Ubuntu 계열에서 repository 추가 후 influxdb2 패키지 설치 방식을 안내합니다. 2
+전체 구성
+PMS7003
+  ↓ UART
+Python 수집 프로그램
+  ↓
+InfluxDB 로컬 DB :8086
+  ↓
+Grafana 로컬 대시보드 :3000
+접속 주소는 보통 이렇게 됩니다.
 
+InfluxDB : http://라즈베리파이IP:8086
+Grafana  : http://라즈베리파이IP:3000
+1. 라즈베리파이 OS 확인
+InfluxDB 2.x는 64-bit Raspberry Pi OS 권장입니다.
+
+uname -m
+결과가 아래처럼 나오면 OK입니다.
+
+aarch64
+2. 기본 패키지 설치
 sudo apt update
-sudo apt install -y curl gnupg
-
+sudo apt upgrade -y
+sudo apt install -y curl wget gnupg apt-transport-https python3 python3-pip python3-venv
+3. InfluxDB 설치
 curl --silent --location -O https://repos.influxdata.com/influxdata-archive.key
 
-gpg --show-keys --with-fingerprint --with-colons ./influxdata-archive.key 2>&1 \
-| grep -q '^fpr:\+24C975CBA61A024EE1B631787C3D57159FC2F927:$' \
-&& cat influxdata-archive.key \
-| gpg --dearmor \
-| sudo tee /etc/apt/keyrings/influxdata-archive.gpg > /dev/null
+cat influxdata-archive.key | gpg --dearmor | sudo tee /etc/apt/keyrings/influxdata-archive.gpg > /dev/null
 
 echo 'deb [signed-by=/etc/apt/keyrings/influxdata-archive.gpg] https://repos.influxdata.com/debian stable main' \
 | sudo tee /etc/apt/sources.list.d/influxdata.list
@@ -22,44 +34,37 @@ sudo apt install -y influxdb2
 실행:
 
 sudo systemctl enable --now influxdb
-sudo systemctl status influxdb
 접속:
 
 http://라즈베리파이IP:8086
-여기서 웹 UI로 다음을 생성하면 됩니다.
+초기 설정에서 아래처럼 만들면 됩니다.
 
-Org    : diehard
-Bucket : pms7003
-Token  : Python/Grafana에서 사용할 API Token
-2. Grafana 설치
-Grafana도 Docker 없이 Debian/Ubuntu 계열에 APT repository로 설치 가능합니다. 공식 문서상 APT repository 방식으로 설치하면 apt-get update 시 업데이트도 같이 관리됩니다. 3
-
-sudo apt-get install -y apt-transport-https wget gnupg
-
+Organization : diehard
+Bucket       : pms7003
+Token        : 생성 후 복사해두기
+4. Grafana 설치
 sudo mkdir -p /etc/apt/keyrings
 
-sudo wget -O /etc/apt/keyrings/grafana.asc https://apt.grafana.com/gpg-full.key
-sudo chmod 644 /etc/apt/keyrings/grafana.asc
+wget -q -O - https://apt.grafana.com/gpg.key \
+| gpg --dearmor \
+| sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
 
-echo "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main" \
-| sudo tee -a /etc/apt/sources.list.d/grafana.list
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+| sudo tee /etc/apt/sources.list.d/grafana.list
 
 sudo apt update
 sudo apt install -y grafana
 실행:
 
 sudo systemctl enable --now grafana-server
-sudo systemctl status grafana-server
 접속:
 
 http://라즈베리파이IP:3000
 기본 로그인:
 
-ID: admin
-PW: admin
-처음 로그인하면 비밀번호 변경하라고 나옵니다.
-
-3. Grafana에서 InfluxDB 연결
+ID : admin
+PW : admin
+5. Grafana에서 InfluxDB 연결
 Grafana에서:
 
 Connections
@@ -74,4 +79,27 @@ URL	http://localhost:8086
 Organization	diehard
 Token	InfluxDB에서 만든 Token
 Default bucket	pms7003
-그리고 Save & test.
+주의할 점은 Docker를 안 쓰는 방식이므로 URL은 http://localhost:8086 입니다.
+
+6. Grafana Query 예시
+패널에서 아래 Flux query 사용:
+
+from(bucket: "pms7003")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "dust")
+  |> filter(fn: (r) => r._field == "pm1_0" or r._field == "pm2_5" or r._field == "pm10")
+  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+  |> yield(name: "mean")
+패널 설정:
+
+Visualization : Time series
+Time range    : Last 24 hours
+Unit          : µg/m³
+Refresh       : 30s 또는 1m
+7. Python 수집 프로그램에서는
+InfluxDB 접속 주소를 이렇게 쓰면 됩니다.
+
+INFLUX_URL = "http://localhost:8086"
+INFLUX_ORG = "diehard"
+INFLUX_BUCKET = "pms7003"
+INFLUX_TOKEN = "InfluxDB에서_생성한_토큰"
